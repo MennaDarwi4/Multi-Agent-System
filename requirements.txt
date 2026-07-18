@@ -1,0 +1,29 @@
+# --- core app ---
+streamlit>=1.36
+pandas>=2.0
+requests>=2.31
+plotly>=5.20
+python-dotenv>=1.0
+
+# --- retrieval ---
+pypdf>=4.0
+beautifulsoup4>=4.12
+
+# --- report export ---
+fpdf2>=2.7
+
+# --- LLM providers (install what you use; all optional) ---
+groq>=0.11
+openai>=1.40
+anthropic>=0.34
+
+# --- deployment tunnel ---
+pyngrok>=7.0
+
+# --- optional REST deployment path ---
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+
+# --- testing ---
+pytest>=8.0
