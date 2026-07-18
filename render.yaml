@@ -1,0 +1,21 @@
+# Render Blueprint for the FastAPI backend (Docker).
+# Push this repo to GitHub, then in Render: New > Blueprint > pick this repo.
+# Render builds the Dockerfile and exposes a public https URL for the service —
+# use that URL as BACKEND_URL in your Streamlit Cloud app's secrets.
+services:
+  - type: web
+    name: multi-agent-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # Set the actual values in the Render dashboard (kept out of git).
+      - key: GROQ_API_KEY
+        sync: false
+      # Shared secret the Streamlit frontend must send as X-API-Key.
+      - key: BACKEND_API_KEY
+        sync: false
+      # Optional overrides:
+      # - key: GROQ_PRIMARY_MODEL
+      #   value: llama-3.3-70b-versatile

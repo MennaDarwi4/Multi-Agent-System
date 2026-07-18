@@ -1,35 +1,55 @@
 """
-Multi-Agent AI System - Streamlit UI  (Objective 5: Presentation)
+Argus — Market & Competitive Intelligence · Streamlit frontend  (Objective 5)
 
-Run locally:
+This is a thin UI. The pipeline runs in the FastAPI backend (api.py); this app
+only stages sources, POSTs them to the backend, and renders the JSON response.
+
+Run the backend first, then this app:
+    uvicorn api:app --port 8000
     streamlit run app.py
 
-Run on Colab / expose publicly with ngrok:
-    python run_ngrok.py            (see that file / README)
-
-The UI lets you stage heterogeneous sources, run the orchestrated pipeline with
-a live progress bar, and inspect every output: report, structured analysis,
-an auto dashboard, the drafted email, and the full orchestration trace.
+The backend URL is read from BACKEND_URL (default http://localhost:8000).
+Configuration (Groq API key, models, generation params) lives on the backend's
+environment / .env — there are no settings in the UI.
 """
 from __future__ import annotations
 
+import base64
+import json
 import os
 
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 
-from config import Settings
-from orchestrator import Orchestrator
+from config import APP_DESCRIPTION, APP_NAME, APP_TAGLINE
+
+
+def _conf(name: str, default: str = "") -> str:
+    """Read config from env first, then Streamlit secrets (for Streamlit Cloud)."""
+    val = os.getenv(name)
+    if val:
+        return val
+    try:
+        return str(st.secrets[name])
+    except Exception:  # no secrets file / key not present
+        return default
+
+
+BACKEND_URL = _conf("BACKEND_URL", "http://localhost:8000").rstrip("/")
+REQUEST_TIMEOUT = int(_conf("BACKEND_TIMEOUT", "600"))
+BACKEND_API_KEY = _conf("BACKEND_API_KEY", "")
+_AUTH_HEADERS = {"X-API-Key": BACKEND_API_KEY} if BACKEND_API_KEY else {}
 
 # --------------------------------------------------------------------------
 # Page config + light theming
 # --------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Multi-Agent AI System",
-    page_icon="🧠",
+    page_title=f"{APP_NAME} — Market Intelligence",
+    page_icon="🛰️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
@@ -54,97 +74,108 @@ if "sources" not in st.session_state:
     st.session_state.sources = []          # staged source dicts
 if "result" not in st.session_state:
     st.session_state.result = None         # last PipelineResult
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0      # bump to reset the file uploaders
+if "chat" not in st.session_state:
+    st.session_state.chat = []             # Ask Argus history: {role, content}
+if "chat_run_id" not in st.session_state:
+    st.session_state.chat_run_id = None    # resets chat when a new run happens
 
 
 # --------------------------------------------------------------------------
-# Sidebar: configuration
+# Backend client — the pipeline runs in the FastAPI backend (api.py).
 # --------------------------------------------------------------------------
-with st.sidebar:
-    st.header("⚙️ Configuration")
+# Default summary length (previously an "Advanced settings" slider).
+max_sentences = 5
 
-    _providers = ["offline", "groq", "openai", "anthropic"]
-    _default_provider = os.getenv("LLM_PROVIDER", "offline").lower()
-    provider = st.selectbox(
-        "LLM provider",
-        _providers,
-        index=_providers.index(_default_provider) if _default_provider in _providers else 0,
-        help="Choose 'offline' to run the whole pipeline with extractive "
-             "fallbacks (no key needed). Pick a provider + paste a key for real "
-             "LLM summarization and analysis.",
+
+def _split_sources(sources: list) -> tuple[list, list]:
+    """Separate binary file sources (sent as multipart) from JSON sources."""
+    files, json_sources = [], []
+    for s in sources:
+        if "bytes" in s:
+            files.append(("files", (s.get("title", "file"), s["bytes"], "application/octet-stream")))
+        else:
+            json_sources.append({k: v for k, v in s.items() if k != "bytes"})
+    return files, json_sources
+
+
+def run_pipeline(sources: list, **opts) -> dict:
+    """POST staged sources + options to the backend and return the parsed JSON."""
+    files, json_sources = _split_sources(sources)
+    payload = {"sources": json_sources, **opts}
+    resp = requests.post(
+        f"{BACKEND_URL}/run",
+        files=files,
+        data={"payload": json.dumps(payload)},
+        headers=_AUTH_HEADERS,
+        timeout=REQUEST_TIMEOUT,
     )
-
-    api_key = ""
-    if provider != "offline":
-        api_key = st.text_input(
-            f"{provider.upper()} API key",
-            type="password",
-            value=os.getenv(f"{provider.upper()}_API_KEY", ""),
-            help="Kept only in this session; never written to disk.",
-        )
-
-    with st.expander("Advanced settings"):
-        temperature = st.slider("Temperature", 0.0, 1.0, 0.3, 0.1)
-        max_tokens = st.number_input("Max tokens", 256, 4096, 1024, 128)
-        parallel_workers = st.slider("Parallel summarizer workers", 1, 8, 4)
-        max_sentences = st.slider("Summary length (sentences)", 2, 10, 5)
-
-    st.divider()
-    st.caption("Pipeline: Retrieve → Summarize (∥) → Analyze → "
-               "Report / Email / Dashboard")
-
-
-def build_settings() -> Settings:
-    s = Settings()
-    s.provider = provider
-    if provider == "groq":
-        s.groq_api_key = api_key
-    elif provider == "openai":
-        s.openai_api_key = api_key
-    elif provider == "anthropic":
-        s.anthropic_api_key = api_key
-    s.temperature = temperature
-    s.max_tokens = int(max_tokens)
-    s.parallel_workers = int(parallel_workers)
-    return s
+    resp.raise_for_status()
+    return resp.json()
 
 
 # --------------------------------------------------------------------------
 # Header
 # --------------------------------------------------------------------------
-st.title("🧠 Multi-Agent AI System")
+st.title(f"🛰️ {APP_NAME}")
+st.markdown(f"### {APP_TAGLINE}")
 st.markdown(
-    "Retrieve data from **PDFs, CSVs, Google Sheets, APIs, and web pages**, "
-    "then let a team of coordinated agents **summarize, analyze, and act** — "
-    "producing a report, an email draft, and a live dashboard."
+    f"{APP_DESCRIPTION} Feed **competitor pages, market reports (PDF), metrics "
+    "(CSV), and news APIs** — a team of coordinated agents **summarizes, "
+    "analyzes the landscape, and acts**, producing a market brief, a stakeholder "
+    "email, and a live dashboard."
 )
 
-tab_sources, tab_report, tab_analysis, tab_dash, tab_email, tab_trace = st.tabs(
-    ["📥 Sources", "📄 Report", "🔎 Analysis", "📊 Dashboard", "✉️ Email", "🧭 Run Trace"]
+
+@st.cache_data(ttl=10, show_spinner=False)
+def _backend_health() -> dict:
+    try:
+        r = requests.get(f"{BACKEND_URL}/health", timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:  # noqa: BLE001
+        return {"status": "down", "error": str(e)}
+
+
+_health = _backend_health()
+if _health.get("status") != "ok":
+    st.error("⚠️ The analysis service is temporarily unavailable. "
+             "Please try again in a moment.")
+
+tab_sources, tab_report, tab_dash, tab_ask, tab_email = st.tabs(
+    ["📥 Signals", "📄 Brief", "📊 Dashboard", "💬 Ask", "✉️ Email"]
 )
 
 # --------------------------------------------------------------------------
 # TAB: Sources
 # --------------------------------------------------------------------------
 with tab_sources:
-    st.subheader("1 · Add data sources")
+    st.subheader("1 · Add market signals")
+
+    def _stage_uploads(files, kind: str) -> None:
+        """Auto-stage uploaded files (no extra click), deduped by name."""
+        existing = {(s["kind"], s["title"]) for s in st.session_state.sources
+                    if "bytes" in s}
+        for f in files or []:
+            key = (kind, f.name)
+            if key not in existing:
+                st.session_state.sources.append(
+                    {"kind": kind, "bytes": f.getvalue(), "title": f.name}
+                )
+                existing.add(key)
+
     c1, c2 = st.columns(2)
 
     with c1:
-        up_pdfs = st.file_uploader("Upload PDF(s)", type=["pdf"], accept_multiple_files=True)
-        if up_pdfs and st.button("➕ Add uploaded PDFs"):
-            for f in up_pdfs:
-                st.session_state.sources.append(
-                    {"kind": "pdf", "bytes": f.getvalue(), "title": f.name}
-                )
-            st.success(f"Added {len(up_pdfs)} PDF(s).")
+        uk = st.session_state.uploader_key
+        up_pdfs = st.file_uploader("Market report(s) — PDF", type=["pdf"],
+                                   accept_multiple_files=True, key=f"pdf_{uk}")
+        _stage_uploads(up_pdfs, "pdf")
 
-        up_csvs = st.file_uploader("Upload CSV/TSV", type=["csv", "tsv"], accept_multiple_files=True)
-        if up_csvs and st.button("➕ Add uploaded CSVs"):
-            for f in up_csvs:
-                st.session_state.sources.append(
-                    {"kind": "csv", "bytes": f.getvalue(), "title": f.name}
-                )
-            st.success(f"Added {len(up_csvs)} table(s).")
+        up_csvs = st.file_uploader("Metrics / sales — CSV/TSV", type=["csv", "tsv"],
+                                   accept_multiple_files=True, key=f"csv_{uk}")
+        _stage_uploads(up_csvs, "csv")
 
         sheet_url = st.text_input("Public Google Sheet URL")
         if sheet_url and st.button("➕ Add Google Sheet"):
@@ -154,21 +185,21 @@ with tab_sources:
             st.success("Added Google Sheet.")
 
     with c2:
-        api_url = st.text_input("API URL (returns JSON)")
-        if api_url and st.button("➕ Add API"):
-            st.session_state.sources.append(
-                {"kind": "api", "url": api_url, "title": f"API: {api_url[:30]}"}
-            )
-            st.success("Added API source.")
-
-        web_url = st.text_input("Web page URL")
+        web_url = st.text_input("Competitor / market web page URL")
         if web_url and st.button("➕ Add web page"):
             st.session_state.sources.append(
                 {"kind": "web", "url": web_url, "title": web_url}
             )
             st.success("Added web page.")
 
-        paste = st.text_area("Paste raw text", height=90)
+        api_url = st.text_input("News / market API URL (returns JSON)")
+        if api_url and st.button("➕ Add API"):
+            st.session_state.sources.append(
+                {"kind": "api", "url": api_url, "title": f"API: {api_url[:30]}"}
+            )
+            st.success("Added API source.")
+
+        paste = st.text_area("Paste raw text (notes, transcripts, snippets)", height=90)
         if paste and st.button("➕ Add pasted text"):
             st.session_state.sources.append(
                 {"kind": "text", "text": paste, "title": "Pasted text"}
@@ -176,76 +207,56 @@ with tab_sources:
             st.success("Added text source.")
 
     st.divider()
-    lc, rc = st.columns([3, 1])
-    with lc:
-        st.markdown("**Staged sources**")
-        if st.session_state.sources:
-            st.dataframe(
-                pd.DataFrame(
-                    [{"kind": s["kind"], "title": s.get("title", s.get("url", ""))}
-                     for s in st.session_state.sources]
-                ),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.info("No sources yet. Add some above, or load the bundled samples →")
-    with rc:
-        if st.button("📦 Load sample data"):
-            base = os.path.join(os.path.dirname(__file__), "sample_data")
-            try:
-                with open(os.path.join(base, "sample_market_memo.pdf"), "rb") as f:
-                    st.session_state.sources.append(
-                        {"kind": "pdf", "bytes": f.read(), "title": "sample_market_memo.pdf"})
-                with open(os.path.join(base, "sample_sales.csv"), "rb") as f:
-                    st.session_state.sources.append(
-                        {"kind": "csv", "bytes": f.read(), "title": "sample_sales.csv"})
-                st.session_state.sources.append(
-                    {"kind": "text", "title": "analyst_note",
-                     "text": "DevOps and SRE hiring in Egypt accelerated in 2026 with "
-                             "strong Jenkins and Kubernetes demand."})
-                st.success("Loaded 3 sample sources.")
-            except Exception as e:
-                st.error(f"Could not load samples: {e}")
-        if st.button("🗑️ Clear all"):
+    n_sources = len(st.session_state.sources)
+    if n_sources:
+        cs1, cs2 = st.columns([3, 1])
+        cs1.success(f"✅ {n_sources} source(s) staged — ready to run.")
+        if cs2.button("🗑️ Clear all"):
             st.session_state.sources = []
             st.session_state.result = None
+            st.session_state.uploader_key += 1   # reset the file uploaders
+            st.rerun()
+    else:
+        st.info("Add at least one source above — a single file is enough to run.")
 
     st.divider()
     st.subheader("2 · Configure & run")
-    report_title = st.text_input("Report title", "Automated Intelligence Report")
-    objective = st.text_input("Analysis objective (optional)",
-                              "Summarize the key findings and recommend next steps")
+    report_title = st.text_input("Brief title", "Market Intelligence Brief")
+    objective = st.text_input(
+        "Intelligence objective (optional)",
+        "Assess the competitive landscape: key players, positioning, momentum, "
+        "opportunities, and threats",
+    )
     a1, a2, a3 = st.columns(3)
-    do_report = a1.checkbox("Generate report", True)
+    do_report = a1.checkbox("Generate brief", True)
     do_email = a2.checkbox("Draft email", True)
     do_dashboard = a3.checkbox("Build dashboard", True)
     email_recipient = st.text_input("Email recipient (label)", "the team")
 
-    run = st.button("🚀 Run pipeline", type="primary", use_container_width=True,
+    run = st.button(f"🛰️ Run {APP_NAME}", type="primary", use_container_width=True,
                     disabled=not st.session_state.sources)
 
     if run:
-        prog = st.progress(0.0, text="Starting…")
-
-        def cb(label, frac):
-            prog.progress(min(frac, 1.0), text=label)
-
         try:
-            orch = Orchestrator(build_settings())
-            st.session_state.result = orch.run(
-                st.session_state.sources,
-                report_title=report_title,
-                objective=objective,
-                max_sentences=max_sentences,
-                do_report=do_report,
-                do_email=do_email,
-                do_dashboard=do_dashboard,
-                email_recipient=email_recipient,
-                progress_cb=cb,
-            )
-            prog.progress(1.0, text="Done")
-            st.success("Pipeline complete — see the Report, Analysis, Dashboard, "
-                       "Email, and Run Trace tabs.")
+            with st.spinner("Running pipeline on the backend…"):
+                st.session_state.result = run_pipeline(
+                    st.session_state.sources,
+                    report_title=report_title,
+                    objective=objective,
+                    max_sentences=max_sentences,
+                    do_report=do_report,
+                    do_email=do_email,
+                    do_dashboard=do_dashboard,
+                    email_recipient=email_recipient,
+                )
+            st.success("Done — see the Brief, Landscape, Dashboard, and Email tabs.")
+        except requests.HTTPError as e:  # noqa: BLE001
+            detail = ""
+            try:
+                detail = e.response.json().get("error", "")
+            except Exception:  # noqa: BLE001
+                detail = e.response.text[:300] if e.response is not None else ""
+            st.error(f"Pipeline failed ({e}). {detail}")
         except Exception as e:  # noqa: BLE001
             st.error(f"Pipeline failed: {e}")
 
@@ -256,66 +267,45 @@ result = st.session_state.result
 # TAB: Report
 # --------------------------------------------------------------------------
 with tab_report:
-    if result and result.report:
-        st.subheader("Generated report")
-        md = result.report.get("markdown", "")
+    report = (result or {}).get("report") if result else None
+    if report and report.get("markdown"):
+        st.subheader("Market intelligence brief")
+
+        analysis = (result or {}).get("analysis") or {}
+        if analysis:
+            sentiment = analysis.get("overall_sentiment", "neutral")
+            color = {"positive": "🟢", "negative": "🔴"}.get(sentiment, "🟡")
+            s1, s2 = st.columns(2)
+            s1.metric("Market sentiment", f"{color} {sentiment}")
+            s2.metric("Confidence", analysis.get("confidence", "n/a"))
+
+        md = report.get("markdown", "")
         d1, d2 = st.columns(2)
-        d1.download_button("⬇️ Download Markdown", md, file_name="report.md",
+        d1.download_button("⬇️ Download Markdown", md, file_name="market_brief.md",
                            mime="text/markdown", use_container_width=True)
-        if result.report.get("pdf_bytes"):
-            d2.download_button("⬇️ Download PDF", result.report["pdf_bytes"],
-                               file_name="report.pdf", mime="application/pdf",
+        if report.get("pdf_base64"):
+            d2.download_button("⬇️ Download PDF", base64.b64decode(report["pdf_base64"]),
+                               file_name="market_brief.pdf", mime="application/pdf",
                                use_container_width=True)
         st.markdown("---")
         st.markdown(md)
     else:
-        st.info("Run the pipeline to generate a report.")
-
-# --------------------------------------------------------------------------
-# TAB: Analysis
-# --------------------------------------------------------------------------
-with tab_analysis:
-    if result and result.analysis:
-        a = result.analysis
-        st.subheader("Cross-source synthesis")
-        sentiment = a.get("overall_sentiment", "neutral")
-        color = {"positive": "🟢", "negative": "🔴"}.get(sentiment, "🟡")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Sentiment", f"{color} {sentiment}")
-        m2.metric("Confidence", a.get("confidence", "n/a"))
-        m3.metric("Engine", a.get("_engine", "n/a"))
-
-        st.markdown("#### Executive summary")
-        st.write(a.get("executive_summary", "—"))
-
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            st.markdown("#### Key findings")
-            for f in a.get("key_findings", []):
-                st.markdown(f"- {f}")
-        with cc2:
-            st.markdown("#### Recommendations")
-            for r in a.get("recommendations", []):
-                st.markdown(f"- {r}")
-        st.markdown("#### Risks & gaps")
-        for r in a.get("risks_or_gaps", []):
-            st.markdown(f"- {r}")
-    else:
-        st.info("Run the pipeline to see the analysis.")
+        st.info("Run Argus to generate a market brief.")
 
 # --------------------------------------------------------------------------
 # TAB: Dashboard
 # --------------------------------------------------------------------------
 with tab_dash:
-    if result and result.dashboard:
-        d = result.dashboard
+    d = (result or {}).get("dashboard") if result else None
+    if d and d.get("metrics"):
         m = d["metrics"]
-        st.subheader("Live metrics")
-        cols = st.columns(4)
-        cols[0].metric("Sources", m["sources"])
-        cols[1].metric("Success rate", f"{m['success_rate']*100:.0f}%")
-        cols[2].metric("Compression", f"{m['compression_ratio']*100:.0f}%")
-        cols[3].metric("Wall clock", f"{m['wall_clock_s']}s")
+        sentiment = m.get("sentiment", "neutral")
+        color = {"positive": "🟢", "negative": "🔴"}.get(sentiment, "🟡")
+        st.subheader("Market overview")
+        cols = st.columns(3)
+        cols[0].metric("Signals analyzed", m["sources"])
+        cols[1].metric("Market sentiment", f"{color} {sentiment}")
+        cols[2].metric("Confidence", m.get("confidence", "n/a"))
 
         g1, g2 = st.columns(2)
         with g1:
@@ -323,83 +313,98 @@ with tab_dash:
                 fig = px.pie(
                     names=list(d["source_type_counts"].keys()),
                     values=list(d["source_type_counts"].values()),
-                    title="Sources by type", hole=0.45,
+                    title="Signals by type", hole=0.45,
                 )
                 st.plotly_chart(fig, use_container_width=True)
         with g2:
-            if d.get("agent_latency"):
-                fig = px.bar(
-                    x=list(d["agent_latency"].keys()),
-                    y=list(d["agent_latency"].values()),
-                    title="Latency per agent (s)", labels={"x": "", "y": "seconds"},
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-        g3, g4 = st.columns(2)
-        with g3:
-            if d.get("chars_per_source"):
-                fig = px.bar(
-                    x=list(d["chars_per_source"].values()),
-                    y=list(d["chars_per_source"].keys()),
-                    orientation="h", title="Characters per source",
-                    labels={"x": "chars", "y": ""},
-                )
-                st.plotly_chart(fig, use_container_width=True)
-        with g4:
             if d.get("top_keywords"):
-                st.markdown("#### Top keywords")
+                st.markdown("#### 🔥 Trending topics")
                 st.write(" ".join(f"`{k}`" for k in d["top_keywords"]))
 
-        # optional: chart from an uploaded numeric table
+        # chart any numeric columns from an uploaded metrics/sales table
         for t in d.get("tables", []):
-            df = t.get("dataframe")
-            if isinstance(df, pd.DataFrame):
+            records = t.get("records") or []
+            if records:
+                df = pd.DataFrame(records)
                 num = df.select_dtypes("number")
                 if not num.empty:
-                    st.markdown(f"#### Numeric view · {t['title']}")
+                    st.markdown(f"#### 📊 {t['title']}")
                     fig = px.line(num.reset_index(), x="index", y=list(num.columns),
                                   markers=True, title=t["title"])
                     st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("Run the pipeline to build the dashboard.")
+        st.info("Run Argus to build the market dashboard.")
+
+# --------------------------------------------------------------------------
+# TAB: Ask Argus  (interactive Q&A grounded in the run's sources)
+# --------------------------------------------------------------------------
+with tab_ask:
+    run_id = (result or {}).get("run_id") if result else None
+    if not run_id:
+        st.info("Run Argus first, then ask questions about your market signals.")
+    else:
+        # reset the conversation whenever a fresh run happens
+        if st.session_state.chat_run_id != run_id:
+            st.session_state.chat = []
+            st.session_state.chat_run_id = run_id
+
+        st.caption("Ask anything about the sources you just analyzed — answers are "
+                   "grounded in those sources.")
+        for msg in st.session_state.chat:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        question = st.chat_input("e.g. What are the biggest threats to our position?")
+        if question:
+            st.session_state.chat.append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.markdown(question)
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking…"):
+                    try:
+                        r = requests.post(
+                            f"{BACKEND_URL}/ask",
+                            json={"run_id": run_id, "question": question},
+                            headers=_AUTH_HEADERS,
+                            timeout=120,
+                        )
+                        r.raise_for_status()
+                        answer = r.json().get("answer", "—")
+                    except Exception as e:  # noqa: BLE001
+                        answer = f"Couldn't answer right now: {e}"
+                st.markdown(answer)
+            st.session_state.chat.append({"role": "assistant", "content": answer})
 
 # --------------------------------------------------------------------------
 # TAB: Email
 # --------------------------------------------------------------------------
 with tab_email:
-    if result and result.email:
-        st.subheader("Drafted email (automated action)")
-        subject = st.text_input("Subject", result.email.get("subject", ""))
-        body = st.text_area("Body", result.email.get("body", ""), height=280)
+    email = (result or {}).get("email") if result else None
+    if email:
+        st.subheader("Stakeholder email")
+        subject = st.text_input("Subject", email.get("subject", ""))
+        body = st.text_area("Body", email.get("body", ""), height=280)
         st.download_button("⬇️ Download .eml", f"Subject: {subject}\n\n{body}",
                            file_name="draft.eml", mime="message/rfc822")
 
         st.divider()
-        st.caption("Optional: actually send via SMTP (requires SMTP_* env vars). "
-                   "Sending is off by default so nothing is emailed by accident.")
-        to_addr = st.text_input("Send to (email address)")
+        st.caption("Send this brief to a colleague:")
+        to_addr = st.text_input("Recipient email address")
         if st.button("📤 Send email", disabled=not to_addr):
-            from agents import EmailAgent
-            status = EmailAgent().send(to_addr, subject, body)
-            if status.get("sent"):
-                st.success(f"Sent to {to_addr}")
-            else:
-                st.warning(f"Not sent: {status.get('reason')}")
+            try:
+                r = requests.post(
+                    f"{BACKEND_URL}/send-email",
+                    json={"to_addr": to_addr, "subject": subject, "body": body},
+                    headers=_AUTH_HEADERS,
+                    timeout=60,
+                )
+                r.raise_for_status()
+                status = r.json()
+                if status.get("sent"):
+                    st.success(f"Sent to {to_addr}")
+                else:
+                    st.warning(f"Not sent: {status.get('reason')}")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"Send failed: {e}")
     else:
         st.info("Run the pipeline to draft an email.")
-
-# --------------------------------------------------------------------------
-# TAB: Run Trace  (proof of orchestration)
-# --------------------------------------------------------------------------
-with tab_trace:
-    if result and result.trace:
-        st.subheader("Orchestration trace")
-        st.caption("Every agent step, in execution order, with status and latency.")
-        st.dataframe(pd.DataFrame(result.trace.as_rows()),
-                     use_container_width=True, hide_index=True)
-        t1, t2, t3 = st.columns(3)
-        t1.metric("Agent steps", len(result.trace.events))
-        t2.metric("Success rate", f"{result.trace.success_rate()*100:.0f}%")
-        t3.metric("Total agent latency", f"{result.trace.total_latency_s}s")
-    else:
-        st.info("Run the pipeline to see the orchestration trace.")

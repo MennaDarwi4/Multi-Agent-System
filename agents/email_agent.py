@@ -15,7 +15,7 @@ from email.mime.text import MIMEText
 from typing import Any, Dict, Optional
 
 from agents.base import BaseAgent
-from config import settings
+from config import APP_NAME, settings
 from llm_client import LLMError
 
 _SYSTEM = (
@@ -29,17 +29,18 @@ class EmailAgent(BaseAgent):
 
     def draft(self, title: str, analysis: Dict[str, Any], recipient: str = "team") -> Dict[str, str]:
         t0 = time.time()
-        subject = f"[Auto-Report] {title}"
+        subject = f"[{APP_NAME} Brief] {title}"
 
         if self.llm.available:
             try:
-                findings = "\n".join(f"- {f}" for f in analysis.get("key_findings", [])[:5])
+                highlights = analysis.get("competitor_moves") or analysis.get("key_findings", [])
+                findings = "\n".join(f"- {f}" for f in highlights[:5])
                 recs = "\n".join(f"- {r}" for r in analysis.get("recommendations", [])[:3])
                 prompt = (
-                    f"Write an email to {recipient} summarizing this analysis.\n\n"
+                    f"Write a market-intelligence briefing email to {recipient}.\n\n"
                     f"Executive summary: {analysis.get('executive_summary','')}\n\n"
-                    f"Key findings:\n{findings}\n\nRecommendations:\n{recs}\n\n"
-                    f"Overall sentiment: {analysis.get('overall_sentiment','neutral')}"
+                    f"Key market signals:\n{findings}\n\nRecommendations:\n{recs}\n\n"
+                    f"Market sentiment: {analysis.get('overall_sentiment','neutral')}"
                 )
                 res = self.llm.chat(_SYSTEM, prompt)
                 body = res.text
@@ -55,16 +56,17 @@ class EmailAgent(BaseAgent):
 
     @staticmethod
     def _template(title: str, analysis: Dict[str, Any], recipient: str) -> str:
-        findings = "\n".join(f"  - {f}" for f in analysis.get("key_findings", [])[:5])
+        highlights = analysis.get("competitor_moves") or analysis.get("key_findings", [])
+        findings = "\n".join(f"  - {f}" for f in highlights[:5])
         recs = "\n".join(f"  - {r}" for r in analysis.get("recommendations", [])[:3])
         return (
             f"Hi {recipient},\n\n"
-            f"Here is an automated summary for: {title}.\n\n"
+            f"Here is your market-intelligence brief for: {title}.\n\n"
             f"{analysis.get('executive_summary','')}\n\n"
-            f"Key findings:\n{findings or '  - (none)'}\n\n"
+            f"Key market signals:\n{findings or '  - (none)'}\n\n"
             f"Recommendations:\n{recs or '  - (none)'}\n\n"
-            f"Overall sentiment: {analysis.get('overall_sentiment','neutral')}.\n\n"
-            f"Best regards,\nMulti-Agent AI System"
+            f"Market sentiment: {analysis.get('overall_sentiment','neutral')}.\n\n"
+            f"Best regards,\n{APP_NAME}"
         )
 
     def send(

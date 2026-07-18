@@ -1,9 +1,10 @@
 """
 AnalysisAgent  (Objective 2: Processing & Analysis, cross-source)
 
-Takes the per-source summaries and produces:
+Takes the per-source summaries and produces a competitive-landscape read:
   * an executive synthesis across all sources
-  * a structured JSON object: key_findings, risks, recommendations, sentiment
+  * a structured JSON object: market_trends, competitor_moves, opportunities,
+    threats, recommendations, sentiment
 
 Robustness:
   * The LLM is asked for STRICT JSON. We parse defensively (strip code fences,
@@ -23,18 +24,22 @@ from llm_client import LLMError
 from utils.extractive import keywords as extract_keywords
 
 _SYSTEM = (
-    "You are a senior analyst. Synthesize multiple source summaries into one "
-    "coherent analysis. Respond with STRICT JSON only - no prose, no markdown "
-    "fences. Never invent sources."
+    "You are a competitive and market-intelligence analyst. Synthesize the "
+    "provided sources into one coherent read of the market: momentum, the moves "
+    "of key players, where the openings are, and what threatens the position. "
+    "Respond with STRICT JSON only - no prose, no markdown fences. Ground every "
+    "claim in the sources; never invent competitors, numbers, or events."
 )
 
 _SCHEMA_HINT = """
 Return JSON with exactly these keys:
 {
-  "executive_summary": "3-5 sentence synthesis across all sources",
-  "key_findings": ["finding 1", "finding 2", "..."],
-  "risks_or_gaps": ["risk 1", "..."],
-  "recommendations": ["actionable recommendation 1", "..."],
+  "executive_summary": "3-5 sentence read of the competitive landscape",
+  "market_trends": ["trend or shift in demand/technology/pricing", "..."],
+  "competitor_moves": ["a named player and what they are doing", "..."],
+  "opportunities": ["an exploitable opening or unmet need", "..."],
+  "threats": ["a competitive or market risk to guard against", "..."],
+  "recommendations": ["actionable next step", "..."],
   "overall_sentiment": "positive" | "neutral" | "negative",
   "confidence": 0.0
 }
@@ -117,7 +122,8 @@ class AnalysisAgent(BaseAgent):
     def _heuristic(self, docs: List[Document]) -> Dict[str, Any]:
         all_text = " ".join(d.summary or d.text for d in docs)
         kws = extract_keywords(all_text, top_n=12)
-        findings = [
+        # each source is treated as a market signal / competitor mention
+        moves = [
             f"{d.title}: {(d.summary or d.text[:160]).strip()}" for d in docs
         ]
         # extremely rough sentiment via lexicon
@@ -128,12 +134,19 @@ class AnalysisAgent(BaseAgent):
             "executive_summary": " ".join(
                 (d.summary or d.text[:200]) for d in docs[:3]
             )[:600],
-            "key_findings": findings[:8],
-            "risks_or_gaps": [
-                "Automated heuristic synthesis - configure an LLM key for deeper analysis."
+            "market_trends": [
+                f"Recurring themes across sources: {', '.join(kws[:6])}."
+            ],
+            "competitor_moves": moves[:8],
+            "opportunities": [
+                f"Underdeveloped angles worth exploring: {', '.join(kws[6:11]) or 'n/a'}.",
+            ],
+            "threats": [
+                "Automated heuristic synthesis - configure a Groq key for a deeper "
+                "competitive read.",
             ],
             "recommendations": [
-                f"Investigate top themes: {', '.join(kws[:5])}.",
+                f"Track the leading signals: {', '.join(kws[:5])}.",
                 "Cross-check figures against primary sources before acting.",
             ],
             "overall_sentiment": sentiment,

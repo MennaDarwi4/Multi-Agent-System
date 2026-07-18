@@ -57,7 +57,7 @@ class Orchestrator:
     def run(
         self,
         sources: List[Dict[str, Any]],
-        report_title: str = "Automated Intelligence Report",
+        report_title: str = "Market Intelligence Brief",
         objective: str = "",
         max_sentences: int = 5,
         do_report: bool = True,

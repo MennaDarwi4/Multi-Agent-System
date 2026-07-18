@@ -1,17 +1,17 @@
 """
 Unit + integration tests (Objective 6: Testing & Evaluation).
 
-These run fully offline (LLM_PROVIDER=offline is forced) so CI never needs a
-key. They verify each agent's contract and the orchestrator's end-to-end
-behavior including the parallel summarization stage.
+These run fully offline (no GROQ_API_KEY is set) so CI never needs a key: the
+agents fall back to extractive logic. They verify each agent's contract and the
+orchestrator's end-to-end behavior including the parallel summarization stage.
 
 Run with:  pytest -q
 """
 import os
 import sys
 
-# force offline before importing the app
-os.environ["LLM_PROVIDER"] = "offline"
+# ensure no key is picked up so agents use the extractive fallback path
+os.environ.pop("GROQ_API_KEY", None)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd  # noqa: E402
@@ -89,7 +89,8 @@ def test_analysis_offline_structured():
                  text="Churn declined and reliability improved.", summary="Churn declined."),
     ]
     out = AnalysisAgent().run(docs)
-    for key in ("executive_summary", "key_findings", "recommendations", "overall_sentiment"):
+    for key in ("executive_summary", "market_trends", "competitor_moves",
+                "opportunities", "threats", "recommendations", "overall_sentiment"):
         assert key in out
     assert out["overall_sentiment"] in ("positive", "neutral", "negative")
 
@@ -104,7 +105,7 @@ def test_orchestrator_end_to_end():
     assert len(res.documents) == 2
     assert res.analysis
     assert res.report["markdown"]
-    assert res.email["subject"].startswith("[Auto-Report]")
+    assert res.email["subject"].startswith("[Argus Brief]")
     assert res.dashboard["metrics"]["sources"] == 2
     # every stage recorded something
     assert res.trace.success_rate() == 1.0

@@ -12,8 +12,8 @@ Runs the full multi-agent pipeline on a fixed sample set and reports:
                  speed-up from running summarization in parallel vs. serial.
 
 Usage:
-    python evaluation/evaluate.py            # offline (no key needed)
-    LLM_PROVIDER=groq GROQ_API_KEY=... python evaluation/evaluate.py
+    python evaluation/evaluate.py            # extractive (no key needed)
+    GROQ_API_KEY=... python evaluation/evaluate.py   # with the Groq LLM
 """
 from __future__ import annotations
 
@@ -27,29 +27,41 @@ from config import Settings  # noqa: E402
 from orchestrator import Orchestrator  # noqa: E402
 from utils.extractive import keywords  # noqa: E402
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-SAMPLE = os.path.join(os.path.dirname(HERE), "sample_data")
-
-# terms we expect a faithful report to surface from the sample corpus
+# terms we expect a faithful report to surface from the fixed corpus
 GROUND_TRUTH_TERMS = ["mena", "cloud", "revenue", "churn", "devops", "sre"]
 
 
 def _load_sources():
-    sources = []
-    pdf = os.path.join(SAMPLE, "sample_market_memo.pdf")
-    csv = os.path.join(SAMPLE, "sample_sales.csv")
-    if os.path.exists(pdf):
-        with open(pdf, "rb") as f:
-            sources.append({"kind": "pdf", "bytes": f.read(), "title": "sample_market_memo.pdf"})
-    if os.path.exists(csv):
-        with open(csv, "rb") as f:
-            sources.append({"kind": "csv", "bytes": f.read(), "title": "sample_sales.csv"})
-    sources.append({
-        "kind": "text",
-        "title": "analyst_note",
-        "text": "DevOps and SRE hiring in Egypt accelerated in 2026 with strong Jenkins and Kubernetes demand.",
-    })
-    return sources
+    """A fixed, self-contained corpus so evaluation needs no external files."""
+    return [
+        {
+            "kind": "text",
+            "title": "market_memo",
+            "text": (
+                "The MENA cloud market grew strongly in 2026. Cloud revenue "
+                "increased about 30% year over year, while customer churn "
+                "declined to record lows as regional demand for cloud "
+                "infrastructure accelerated."
+            ),
+        },
+        {
+            "kind": "text",
+            "title": "sales_summary",
+            "text": (
+                "Quarterly revenue rose across all regions. Cloud product "
+                "revenue led the growth and churn fell further as customer "
+                "retention improved."
+            ),
+        },
+        {
+            "kind": "text",
+            "title": "analyst_note",
+            "text": (
+                "DevOps and SRE hiring in Egypt accelerated in 2026 with strong "
+                "Jenkins and Kubernetes demand."
+            ),
+        },
+    ]
 
 
 def _keyword_coverage(report_md: str, source_text: str, top_n: int = 15) -> float:

@@ -1,9 +1,9 @@
 """
-Central configuration for the Multi-Agent AI System.
+Central configuration for Argus — Market & Competitive Intelligence.
 
-Reads settings from environment variables (or a .env file) so that no secret
-is ever hard-coded. Everything has a sensible default so the app also runs in
-a fully offline / no-key "demo" mode.
+Groq is the only supported LLM provider. Settings are read from environment
+variables (or a local .env file) so no secret is ever hard-coded. If no Groq
+key is present the app still runs, degrading to extractive (non-LLM) fallbacks.
 """
 from __future__ import annotations
 
@@ -20,15 +20,19 @@ except Exception:  # dotenv is optional
     pass
 
 
+# ---- Product identity (single source of truth for branding) --------------
+APP_NAME = os.getenv("APP_NAME", "Argus")
+APP_TAGLINE = os.getenv("APP_TAGLINE", "Your market, watched.")
+APP_DESCRIPTION = (
+    "Turn competitor pages, market reports, and metrics into a "
+    "decision-ready market-intelligence brief."
+)
+
+
 @dataclass
 class Settings:
-    # ---- LLM provider ----------------------------------------------------
-    # provider: "groq" | "openai" | "anthropic" | "offline"
-    provider: str = os.getenv("LLM_PROVIDER", "groq").lower()
-
+    # ---- LLM provider (Groq only) ---------------------------------------
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
-    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
 
     # Fallback chain (first model is tried first, then the next on failure).
     # Mirrors a production-style router: strong model -> fast/cheap model.
@@ -37,12 +41,6 @@ class Settings:
             os.getenv("GROQ_PRIMARY_MODEL", "llama-3.3-70b-versatile"),
             os.getenv("GROQ_FALLBACK_MODEL", "llama-3.1-8b-instant"),
         ]
-    )
-    openai_models: List[str] = field(
-        default_factory=lambda: [os.getenv("OPENAI_MODEL", "gpt-4o-mini")]
-    )
-    anthropic_models: List[str] = field(
-        default_factory=lambda: [os.getenv("ANTHROPIC_MODEL", "claude-3-5-haiku-latest")]
     )
 
     temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.3"))
@@ -63,20 +61,10 @@ class Settings:
     smtp_password: str = os.getenv("SMTP_PASSWORD", "")
 
     def has_llm_key(self) -> bool:
-        return bool(
-            {
-                "groq": self.groq_api_key,
-                "openai": self.openai_api_key,
-                "anthropic": self.anthropic_api_key,
-            }.get(self.provider, "")
-        )
+        return bool(self.groq_api_key)
 
     def active_models(self) -> List[str]:
-        return {
-            "groq": self.groq_models,
-            "openai": self.openai_models,
-            "anthropic": self.anthropic_models,
-        }.get(self.provider, [])
+        return self.groq_models
 
 
 # a singleton-ish default instance the app imports

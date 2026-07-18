@@ -2,14 +2,14 @@
 Provider-agnostic LLM client.
 
 Design goals (maps to objective 6 - reliability):
-  * One `chat()` interface regardless of provider (Groq / OpenAI / Anthropic).
+  * One `chat()` interface backed by the Groq API.
   * A model fallback chain: if the primary model errors or rate-limits, try the
     next model in the chain before giving up.
   * Graceful offline degradation: if there is no key / no network, callers can
     fall back to extractive (non-LLM) logic instead of crashing.
 
-The client lazily imports the provider SDK so the app still starts even if a
-particular SDK is not installed.
+The client lazily imports the Groq SDK so the app still starts even if the SDK
+is not installed.
 """
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ class LLMClient:
     # -- public API --------------------------------------------------------
     @property
     def available(self) -> bool:
-        """True if we have a key for the configured provider."""
-        return self.s.provider != "offline" and self.s.has_llm_key()
+        """True if we have a Groq API key configured."""
+        return self.s.has_llm_key()
 
     def chat(self, system: str, user: str) -> LLMResult:
         """
@@ -51,7 +51,7 @@ class LLMClient:
         """
         if not self.available:
             raise LLMError(
-                f"No API key configured for provider '{self.s.provider}'. "
+                "No GROQ_API_KEY configured. "
                 "Set the key or use extractive fallback."
             )
 
@@ -63,11 +63,11 @@ class LLMClient:
             attempts.append(model)
             t0 = time.time()
             try:
-                text = self._dispatch(model, system, user)
+                text = self._groq(model, system, user)
                 return LLMResult(
                     text=text.strip(),
                     model=model,
-                    provider=self.s.provider,
+                    provider="groq",
                     latency_s=round(time.time() - t0, 3),
                     used_fallback=idx > 0,
                     attempts=attempts,
@@ -79,20 +79,11 @@ class LLMClient:
                 continue
 
         raise LLMError(
-            f"All models failed for provider '{self.s.provider}'. "
+            f"All Groq models failed. "
             f"Tried {attempts}. Last error: {last_err}"
         )
 
-    # -- provider dispatch -------------------------------------------------
-    def _dispatch(self, model: str, system: str, user: str) -> str:
-        if self.s.provider == "groq":
-            return self._groq(model, system, user)
-        if self.s.provider == "openai":
-            return self._openai(model, system, user)
-        if self.s.provider == "anthropic":
-            return self._anthropic(model, system, user)
-        raise LLMError(f"Unknown provider: {self.s.provider}")
-
+    # -- Groq call ---------------------------------------------------------
     def _groq(self, model: str, system: str, user: str) -> str:
         from groq import Groq
 
@@ -107,36 +98,3 @@ class LLMClient:
             max_tokens=self.s.max_tokens,
         )
         return resp.choices[0].message.content or ""
-
-    def _openai(self, model: str, system: str, user: str) -> str:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=self.s.openai_api_key, timeout=self.s.request_timeout)
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=self.s.temperature,
-            max_tokens=self.s.max_tokens,
-        )
-        return resp.choices[0].message.content or ""
-
-    def _anthropic(self, model: str, system: str, user: str) -> str:
-        import anthropic
-
-        client = anthropic.Anthropic(
-            api_key=self.s.anthropic_api_key, timeout=self.s.request_timeout
-        )
-        resp = client.messages.create(
-            model=model,
-            system=system,
-            max_tokens=self.s.max_tokens,
-            temperature=self.s.temperature,
-            messages=[{"role": "user", "content": user}],
-        )
-        # concatenate text blocks
-        return "".join(
-            block.text for block in resp.content if getattr(block, "type", "") == "text"
-        )

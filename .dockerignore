@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.ipynb_checkpoints
+.env
+*.egg-info
+.DS_Store
+report.pdf
+report.md
+.streamlit/secrets.toml
