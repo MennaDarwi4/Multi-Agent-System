@@ -115,6 +115,10 @@ A single Streamlit process, so it deploys directly — no Docker, no backend.
   auto-falls-back to TF-IDF (set `RAG_BACKEND=sparse` in Secrets to force it).
 - **Email sending** requires the `SMTP_*` secrets (Gmail needs a 16-char App
   Password + 2-Step Verification).
+  
+## Application link:
+
+https://multi-agent-systemmm.streamlit.app/
 
 ---
 
