@@ -49,7 +49,6 @@ class Settings:
 
     # ---- Retrieval -------------------------------------------------------
     max_chars_per_source: int = int(os.getenv("MAX_CHARS_PER_SOURCE", "20000"))
-    web_search_enabled: bool = os.getenv("WEB_SEARCH_ENABLED", "true").lower() == "true"
 
     # ---- Orchestration ---------------------------------------------------
     parallel_workers: int = int(os.getenv("PARALLEL_WORKERS", "4"))

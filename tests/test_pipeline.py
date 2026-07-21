@@ -12,6 +12,8 @@ import sys
 
 # ensure no key is picked up so agents use the extractive fallback path
 os.environ.pop("GROQ_API_KEY", None)
+# force the lightweight TF-IDF retriever so RAG tests are fast and need no torch
+os.environ["RAG_BACKEND"] = "sparse"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd  # noqa: E402
@@ -116,6 +118,36 @@ def test_orchestrator_preserves_source_order():
     sources = [{"kind": "text", "text": f"Doc {i} content here.", "title": f"doc{i}"} for i in range(5)]
     res = Orchestrator().run(sources, do_report=False, do_email=False)
     assert [d.title for d in res.documents] == [f"doc{i}" for i in range(5)]
+
+
+# ---- RAG / Ask Argus ----------------------------------------------------
+def test_rag_chunking_splits_long_text():
+    from utils.rag import chunk_document
+    text = " ".join(f"Sentence number {i} about topic {i} here." for i in range(60))
+    chunks = chunk_document("doc", text, max_chars=300)
+    assert len(chunks) > 1
+    assert all(c["title"] == "doc" for c in chunks)
+
+
+def test_rag_retrieves_relevant_chunk():
+    from utils.rag import build_index
+    docs = [
+        {"title": "a", "text": "Acme cut cloud prices sharply this quarter."},
+        {"title": "b", "text": "Globex hired fifty new engineers in Cairo."},
+        {"title": "c", "text": "Customer retention improved after the redesign."},
+    ]
+    idx = build_index(docs)
+    hits = idx.retrieve("cloud prices", k=1)
+    assert hits
+    assert "price" in hits[0][0]["text"].lower()   # retrieved the pricing chunk
+
+
+def test_qa_agent_answers_from_context_offline():
+    from agents import QAAgent
+    context = [{"title": "memo", "text": "Acme cut cloud prices 15% in MENA."}]
+    out = QAAgent().answer("what did Acme do to prices?", context)
+    assert out["answer"]
+    assert out.get("grounded") is True
 
 
 if __name__ == "__main__":

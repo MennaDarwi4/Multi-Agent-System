@@ -1,16 +1,16 @@
-# --- frontend (Streamlit) ---
+# Use the CPU-only PyTorch wheels — far smaller than the default (which bundles
+# CUDA), so torch has a chance of fitting Streamlit Cloud's free tier.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# --- app (Streamlit, runs everything in-process) ---
 streamlit>=1.36
 pandas>=2.0
-requests>=2.31
+numpy>=1.24
 plotly>=5.20
 python-dotenv>=1.0
 
-# --- backend (FastAPI) ---
-fastapi>=0.110
-uvicorn>=0.29
-python-multipart>=0.0.9
-
 # --- retrieval ---
+requests>=2.31
 pypdf>=4.0
 beautifulsoup4>=4.12
 
@@ -19,6 +19,14 @@ fpdf2>=2.7
 
 # --- LLM provider (Groq only) ---
 groq>=0.11
+
+# --- RAG: semantic retrieval (HuggingFace embeddings + FAISS) ---
+# Installed on every host so Ask Argus behaves identically local and deployed.
+# Heavy (torch). If a host can't fit it, utils/rag.py auto-falls-back to TF-IDF,
+# or set RAG_BACKEND=sparse to skip the model entirely.
+torch>=2.0
+sentence-transformers>=2.2
+faiss-cpu>=1.7
 
 # --- testing ---
 pytest>=8.0

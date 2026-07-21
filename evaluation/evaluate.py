@@ -79,9 +79,11 @@ def _ground_truth_recall(report_md: str) -> float:
     return round(hit / len(GROUND_TRUTH_TERMS), 3)
 
 
-def run_once(parallel_workers: int):
+def run_once(parallel_workers: int, force_offline: bool = False):
     s = Settings()
     s.parallel_workers = parallel_workers
+    if force_offline:
+        s.groq_api_key = ""  # force the extractive path -> instant, no LLM quota
     orch = Orchestrator(s)
     t0 = time.time()
     res = orch.run(
@@ -93,18 +95,16 @@ def run_once(parallel_workers: int):
     return res, wall
 
 
-def main():
-    print("=" * 68)
-    print(" MULTI-AGENT SYSTEM - EVALUATION REPORT")
-    print("=" * 68)
+def run_evaluation(force_offline: bool = False) -> dict:
+    """Run the pipeline on the fixed corpus and return structured results.
 
-    res, wall_parallel = run_once(parallel_workers=4)
+    Shared by the CLI (`main`) and the in-app "System check" panel. Pass
+    force_offline=True to skip the LLM (fast, deterministic, no quota use)."""
+    res, wall_parallel = run_once(parallel_workers=4, force_offline=force_offline)
 
-    # source text for accuracy proxies
     source_text = " ".join(d.text for d in res.documents)
     report_md = res.report.get("markdown", "")
 
-    # ---- RELIABILITY ----
     n_expected_sources = 3
     reliability = {
         "sources_retrieved": len(res.documents),
@@ -117,7 +117,6 @@ def main():
         "pdf_produced": bool(res.report.get("pdf_bytes")),
     }
 
-    # ---- ACCURACY ----
     accuracy = {
         "keyword_coverage": _keyword_coverage(report_md, source_text),
         "ground_truth_recall": _ground_truth_recall(report_md),
@@ -125,41 +124,19 @@ def main():
         "sentiment": res.analysis.get("overall_sentiment", "n/a"),
     }
 
-    # ---- EFFICIENCY (parallel vs serial) ----
-    res_serial, wall_serial = run_once(parallel_workers=1)
+    res_serial, wall_serial = run_once(parallel_workers=1, force_offline=force_offline)
     speedup = round(wall_serial / wall_parallel, 2) if wall_parallel else 0.0
+    per_agent: dict = {}
+    for e in res.trace.events:
+        per_agent[e.agent] = round(per_agent.get(e.agent, 0.0) + e.latency_s, 3)
     efficiency = {
         "wall_clock_parallel_s": round(wall_parallel, 3),
         "wall_clock_serial_s": round(wall_serial, 3),
         "parallel_speedup_x": speedup,
         "total_agent_latency_s": res.trace.total_latency_s,
-        "per_agent_latency_s": {
-            k: v for k, v in sorted(
-                {e.agent: 0 for e in res.trace.events}.items()
-            )
-        },
+        "per_agent_latency_s": per_agent,
     }
-    # fill per-agent latency
-    per_agent = {}
-    for e in res.trace.events:
-        per_agent[e.agent] = round(per_agent.get(e.agent, 0.0) + e.latency_s, 3)
-    efficiency["per_agent_latency_s"] = per_agent
 
-    def _section(name, d):
-        print(f"\n[{name}]")
-        for k, v in d.items():
-            print(f"  {k:.<32} {v}")
-
-    _section("RELIABILITY", reliability)
-    _section("ACCURACY", accuracy)
-    _section("EFFICIENCY", efficiency)
-    if speedup < 1.0:
-        print("  note: parallel < serial here because extractive summarization is")
-        print("        near-instant offline, so thread overhead dominates. With a")
-        print("        real LLM (each call ~1-3s) parallel summarization wins clearly.")
-
-    # ---- pass/fail gates ----
-    print("\n[GATES]")
     gates = {
         "all sources retrieved": reliability["retrieval_completeness"] == 1.0,
         "agent success >= 0.9": reliability["agent_success_rate"] >= 0.9,
@@ -169,14 +146,44 @@ def main():
         ),
         "ground-truth recall >= 0.5": accuracy["ground_truth_recall"] >= 0.5,
     }
-    for name, ok in gates.items():
+
+    return {
+        "reliability": reliability,
+        "accuracy": accuracy,
+        "efficiency": efficiency,
+        "gates": gates,
+        "overall": all(gates.values()),
+    }
+
+
+def main():
+    print("=" * 68)
+    print(" MULTI-AGENT SYSTEM - EVALUATION REPORT")
+    print("=" * 68)
+
+    r = run_evaluation()
+
+    def _section(name, d):
+        print(f"\n[{name}]")
+        for k, v in d.items():
+            print(f"  {k:.<32} {v}")
+
+    _section("RELIABILITY", r["reliability"])
+    _section("ACCURACY", r["accuracy"])
+    _section("EFFICIENCY", r["efficiency"])
+    if r["efficiency"]["parallel_speedup_x"] < 1.0:
+        print("  note: parallel < serial here because extractive summarization is")
+        print("        near-instant offline, so thread overhead dominates. With a")
+        print("        real LLM (each call ~1-3s) parallel summarization wins clearly.")
+
+    print("\n[GATES]")
+    for name, ok in r["gates"].items():
         print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
 
-    overall = all(gates.values())
     print("\n" + "=" * 68)
-    print(f" OVERALL: {'PASS' if overall else 'FAIL'}")
+    print(f" OVERALL: {'PASS' if r['overall'] else 'FAIL'}")
     print("=" * 68)
-    return 0 if overall else 1
+    return 0 if r["overall"] else 1
 
 
 if __name__ == "__main__":
